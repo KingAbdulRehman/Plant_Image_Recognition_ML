@@ -23,6 +23,8 @@ test_dir = 'test'  # Update this
 
 def load_and_preprocess_image(image_path):
     img = cv2.imread(image_path)
+    if img is None:
+        raise ValueError(f"Could not load image at {image_path}")
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)  # Convert BGR to RGB
     img = cv2.resize(img, (img_width, img_height))
     img = img.astype(np.float32) / 255.0
@@ -42,6 +44,8 @@ def image_generator(directory, batch_size):
             labels.append(class_indices[class_name])
     
     num_samples = len(image_paths)
+    print(f"Found {num_samples} images in {directory} across {len(class_dirs)} classes.")
+    
     while True:
         indices = np.random.permutation(num_samples)
         for start in range(0, num_samples, batch_size):
@@ -52,6 +56,10 @@ def image_generator(directory, batch_size):
             batch_labels = [labels[i] for i in batch_indices]
             
             yield np.array(batch_images), tf.keras.utils.to_categorical(batch_labels, num_classes=len(class_dirs))
+
+def count_images_in_directory(directory):
+    num_images = sum(len(files) for _, _, files in os.walk(directory) if any(f.lower().endswith(('png', 'jpg', 'jpeg')) for f in files))
+    return num_images
 
 def create_and_train_model():
     train_generator = image_generator(train_dir, batch_size)
@@ -76,8 +84,14 @@ def create_and_train_model():
                   loss='categorical_crossentropy',
                   metrics=['accuracy'])
 
-    steps_per_epoch = len([f for f in os.listdir(os.path.join(train_dir, os.listdir(train_dir)[0])) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]) // batch_size
-    validation_steps = len([f for f in os.listdir(os.path.join(validation_dir, os.listdir(validation_dir)[0])) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]) // batch_size
+    num_train_samples = count_images_in_directory(train_dir)
+    num_validation_samples = count_images_in_directory(validation_dir)
+
+    steps_per_epoch = num_train_samples // batch_size
+    validation_steps = num_validation_samples // batch_size
+
+    print(f"Steps per epoch: {steps_per_epoch}")
+    print(f"Validation steps: {validation_steps}")
 
     history = model.fit(
         train_generator,

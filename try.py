@@ -1,86 +1,127 @@
 import numpy as np
 import tensorflow as tf
-from tensorflow.keras.preprocessing.text import Tokenizer
-from tensorflow.keras.preprocessing.sequence import pad_sequences
 from tensorflow.keras.models import Sequential, load_model
-from tensorflow.keras.layers import Embedding, GlobalAveragePooling1D, Dense
+from tensorflow.keras.layers import Conv2D, MaxPooling2D, Flatten, Dense
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
 import os
 import pickle
+from pathlib import Path
 
-# Sample data
-texts = [
-    "I love this product",
-    "This is terrible",
-    "Great service",
-    "Poor quality",
-    "Highly recommended",
-    "Do not buy",
-    "Amazing experience",
-    "Waste of money"
-]
-labels = [1, 0, 1, 0, 1, 0, 1, 0]  # 1 for positive, 0 for negative
+# Parameters
+img_height, img_width = 150, 150
+batch_size = 32
+epochs = 15
 
 # File paths
-model_path = 'simple_text_model.keras'
-tokenizer_path = 'tokenizer.pickle'
+model_path = 'simple_image_model.keras'
+class_indices_path = 'class_indices.pickle'
 
-# Function to create and train the model
-def create_and_train_model(X, y):
+# Directories
+train_dir = 'train'  # Update this
+validation_dir = 'train'  # Update this
+test_dir = 'test'  # Update this
+
+def create_and_train_model():
+    # Data generators
+    train_datagen = ImageDataGenerator(rescale=1./255)
+    validation_datagen = ImageDataGenerator(rescale=1./255)
+
+    train_generator = train_datagen.flow_from_directory(
+        train_dir,
+        target_size=(img_height, img_width),
+        batch_size=batch_size,
+        class_mode='categorical'
+    )
+
+    validation_generator = validation_datagen.flow_from_directory(
+        validation_dir,
+        target_size=(img_height, img_width),
+        batch_size=batch_size,
+        class_mode='categorical'
+    )
+
+    # Automatically determine the number of classes
+    num_classes = len(train_generator.class_indices)
+    print(f"Number of classes detected: {num_classes}")
+
+    # Create the model
     model = Sequential([
-        Embedding(input_dim=1000, output_dim=16, input_length=10),
-        GlobalAveragePooling1D(),
-        Dense(24, activation='relu'),
-        Dense(1, activation='sigmoid')
+        Conv2D(32, (3, 3), activation='relu', input_shape=(img_height, img_width, 3)),
+        MaxPooling2D(2, 2),
+        Conv2D(64, (3, 3), activation='relu'),
+        MaxPooling2D(2, 2),
+        Conv2D(64, (3, 3), activation='relu'),
+        MaxPooling2D(2, 2),
+        Flatten(),
+        Dense(64, activation='relu'),
+        Dense(num_classes, activation='softmax')
     ])
-    model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
-    model.fit(X, y, epochs=50, verbose=1)
-    return model
 
-# Check if model and tokenizer already exist
-if os.path.exists(model_path) and os.path.exists(tokenizer_path):
-    print("Loading existing model and tokenizer...")
+    model.compile(optimizer='adam',
+                  loss='categorical_crossentropy',
+                  metrics=['accuracy'])
+
+    # Train the model
+    history = model.fit(
+        train_generator,
+        steps_per_epoch=train_generator.samples // batch_size,
+        epochs=epochs,
+        validation_data=validation_generator,
+        validation_steps=validation_generator.samples // batch_size
+    )
+
+    return model, train_generator.class_indices
+
+# Check if model and class indices already exist
+if os.path.exists(model_path) and os.path.exists(class_indices_path):
+    print("Loading existing model and class indices...")
     model = load_model(model_path)
-    with open(tokenizer_path, 'rb') as handle:
-        tokenizer = pickle.load(handle)
+    with open(class_indices_path, 'rb') as handle:
+        class_indices = pickle.load(handle)
 else:
     print("Creating and training new model...")
-    # Tokenize the text
-    tokenizer = Tokenizer(num_words=1000, oov_token="<OOV>")
-    tokenizer.fit_on_texts(texts)
-    sequences = tokenizer.texts_to_sequences(texts)
+    model, class_indices = create_and_train_model()
 
-    # Pad sequences
-    padded = pad_sequences(sequences, maxlen=10, padding='post', truncating='post')
-
-    # Convert to numpy arrays
-    X = np.array(padded)
-    y = np.array(labels)
-
-    # Create and train the model
-    model = create_and_train_model(X, y)
-
-    # Save the model and tokenizer
+    # Save the model and class indices
     model.save(model_path)
-    with open(tokenizer_path, 'wb') as handle:
-        pickle.dump(tokenizer, handle, protocol=pickle.HIGHEST_PROTOCOL)
+    with open(class_indices_path, 'wb') as handle:
+        pickle.dump(class_indices, handle, protocol=pickle.HIGHEST_PROTOCOL)
     print(f"Model saved to {model_path}")
-    print(f"Tokenizer saved to {tokenizer_path}")
+    print(f"Class indices saved to {class_indices_path}")
 
-# Function to predict sentiment
-def predict_sentiment(text):
-    sequence = tokenizer.texts_to_sequences([text])
-    padded = pad_sequences(sequence, maxlen=10, padding='post', truncating='post')
-    prediction = model.predict(padded)
-    return "Positive" if prediction[0][0] > 0.5 else "Negative"
+# Function to predict image class
+def predict_image(image_path):
+    img = tf.keras.preprocessing.image.load_img(
+        image_path, target_size=(img_height, img_width)
+    )
+    img_array = tf.keras.preprocessing.image.img_to_array(img)
+    img_array = tf.expand_dims(img_array, 0)  # Create batch axis
+    img_array /= 255.  # Rescale the image
 
-# Test the model
-test_texts = [
-    "This is awesome",
-    "I hate it",
-    "Not bad at all",
-    "Disappointing product"
-]
+    predictions = model.predict(img_array)
+    score = tf.nn.softmax(predictions[0])
 
-for text in test_texts:
-    sentiment = predict_sentiment(text)
-    print(f"Text: '{text}' - Sentiment: {sentiment}")
+    class_names = list(class_indices.keys())
+    predicted_class = class_names[np.argmax(score)]
+    confidence = 100 * np.max(score)
+
+    return predicted_class, confidence
+
+# Test the model on all images in the test directory
+test_images = list(Path(test_dir).glob('*.*'))
+supported_formats = {'.jpg', '.jpeg', '.png', '.bmp', '.gif'}
+
+print(f"Found {len(test_images)} files in the test directory.")
+print("Testing the model on images...")
+
+for image_path in test_images:
+    if image_path.suffix.lower() in supported_formats:
+        predicted_class, confidence = predict_image(str(image_path))
+        print(f"Image: {image_path.name}")
+        print(f"Predicted class: {predicted_class}")
+        print(f"Confidence: {confidence:.2f}%")
+        print()
+    else:
+        print(f"Skipping unsupported file: {image_path.name}")
+
+print("Testing complete.")

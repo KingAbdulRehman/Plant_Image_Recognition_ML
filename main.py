@@ -19,7 +19,7 @@ test_dir = 'test'    # Make sure this points to your test data directory
 # Parameters
 img_height, img_width = 224, 224
 batch_size = 32
-epochs = 10
+epochs = 20
 model_path = 'plant_model.keras'
 
 # Function to load images and labels from the training directory
